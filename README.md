@@ -98,7 +98,7 @@ This repository satisfies the requested items:
 - multiple model options (Logistic Regression, Decision Tree, Random Forest)
 - metric-based performance evaluation (Precision, Recall, F1, ROC-AUC)
 
-## 🚀 Quick Start
+## Quick Start
 To launch the interactive dashboard and test the models:
 ```powershell
 streamlit run app/main.py
