@@ -101,4 +101,4 @@ This repository satisfies the requested items:
 ## Quick Start
 To launch the interactive dashboard and test the models:
 ```powershell
-streamlit run app/main.py
+streamlit run app/dashboard.py
