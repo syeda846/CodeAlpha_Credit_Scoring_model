@@ -6,3 +6,7 @@ matplotlib
 seaborn
 jupyter
 streamlit
+fastapi
+uvicorn
+pydantic 
+requests

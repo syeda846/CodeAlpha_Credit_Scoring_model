@@ -6,9 +6,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-import joblib
 import matplotlib.pyplot as plt
 import pandas as pd
+import requests
 import seaborn as sns
 import streamlit as st
 
@@ -54,11 +54,6 @@ def resolve_paths(model_type: str) -> tuple[Path, Path]:
 def load_metrics(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
-
-
-@st.cache_resource
-def load_model(path: Path):
-    return joblib.load(path)
 
 
 @st.cache_data
@@ -159,7 +154,7 @@ def render_model_summary(metrics: dict, active_threshold: float) -> None:
 
 def render_performance_cards(metrics: dict) -> None:
     st.subheader("Performance Cards")
-    st.markdown("<div class='panel-subtitle'>Color context: GREEN=GOOD, ORANGE=WATCH, RED=WEAK</div>", unsafe_allow_html=True)
+    #st.markdown("<div class='panel-subtitle'>Color context: GREEN=GOOD, ORANGE=WATCH, RED=WEAK</div>", unsafe_allow_html=True)
     cards = [
         ("Accuracy", float(metrics.get("accuracy", 0.0))),
         ("Precision", float(metrics.get("precision", 0.0))),
@@ -244,12 +239,12 @@ def render_model_stability(metrics: dict) -> None:
         st.info("CV variance looks acceptable for this baseline model.")
 
 
-def render_prediction_form(model, metrics: dict, data: pd.DataFrame, active_threshold: float) -> None:
+def render_prediction_form(data: pd.DataFrame) -> None:
     st.subheader("Prediction Form")
     st.caption("Enter applicant features manually to get probability + final class.")
 
-    target_col = metrics.get("target_column", "Risk")
-    drop_cols = [c for c in ["Unnamed: 0", target_col] if c in data.columns]
+    # API prediction should use only feature columns; remove known non-feature columns if present.
+    drop_cols = [c for c in ["Unnamed: 0", "Risk"] if c in data.columns]
     features_df = data.drop(columns=drop_cols).copy()
     form_key = f"prediction_form_{st.session_state.get('form_version', 0)}"
 
@@ -283,25 +278,52 @@ def render_prediction_form(model, metrics: dict, data: pd.DataFrame, active_thre
     if not submitted:
         return
 
+    # 1) Build the payload with the exact field names expected by FastAPI.
+    # We map UI columns (which contain spaces) to API keys (which use underscores).
+    payload = {
+        "Age": int(user_input["Age"]),
+        "Sex": str(user_input["Sex"]),
+        "Job": int(user_input["Job"]),
+        "Housing": str(user_input["Housing"]),
+        "Saving_accounts": str(user_input["Saving accounts"]),
+        "Checking_account": str(user_input["Checking account"]),
+        "Credit_amount": int(user_input["Credit amount"]),
+        "Duration": int(user_input["Duration"]),
+        "Purpose": str(user_input["Purpose"]),
+    }
+
+    # 2) Send data to the running FastAPI service and parse its JSON response.
     input_df = pd.DataFrame([user_input])
-    prob_bad = float(model.predict_proba(input_df)[:, 1][0])
-    threshold = active_threshold
-    pred_int = int(prob_bad >= threshold)
-    pred_label = label_from_prediction(pred_int, metrics.get("target_mapping"))
-    tier_text, tier_kind = risk_tier(prob_bad, threshold)
+    try:
+        response = requests.post("http://127.0.0.1:8000/predict", json=payload, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+    except requests.exceptions.RequestException:
+        st.error("Connection Error: Is your FastAPI server running at http://127.0.0.1:8000?")
+        st.write("Input prepared for API:")
+        st.dataframe(input_df)
+        return
+    except ValueError:
+        st.error("API Error: Received an invalid JSON response from the prediction endpoint.")
+        st.write("Input prepared for API:")
+        st.dataframe(input_df)
+        return
+
+    # 3) Read API output and present decision + probability in the dashboard.
+    decision = str(result.get("decision", "Unknown"))
+    risk_probability = float(result.get("risk_probability", 0.0))
 
     st.markdown("### Prediction Result")
-    r1, r2, r3 = st.columns(3)
-    r1.metric("Risk Probability (class 1)", f"{prob_bad:.3f}")
-    r2.metric("Threshold Used", f"{threshold:.2f}")
-    r3.metric("Final Class", f"{pred_int} ({pred_label})")
+    c1, c2 = st.columns(2)
+    c1.metric("Risk Probability", f"{risk_probability:.4f}")
+    c2.metric("Decision", decision)
 
-    if tier_kind == "error":
-        st.error(f"Decision: {tier_text}")
-    elif tier_kind == "warning":
-        st.warning(f"Decision: {tier_text}")
+    if decision.lower() == "approve":
+        st.success(f"✅ Approved! Risk: {risk_probability:.4f}")
+    elif decision.lower() == "reject":
+        st.error(f"❌ Rejected. Risk: {risk_probability:.4f}")
     else:
-        st.success(f"Decision: {tier_text}")
+        st.warning(f"Decision from API: {decision} | Risk: {risk_probability:.4f}")
 
     st.write("Input used for prediction:")
     st.dataframe(input_df)
@@ -310,11 +332,8 @@ def render_prediction_form(model, metrics: dict, data: pd.DataFrame, active_thre
         [
             {
                 **user_input,
-                "risk_probability_class_1": round(prob_bad, 6),
-                "threshold": threshold,
-                "predicted_class_int": pred_int,
-                "predicted_class_label": pred_label,
-                "decision_tier": tier_text,
+                "risk_probability": round(risk_probability, 6),
+                "decision": decision,
             }
         ]
     )
@@ -448,23 +467,15 @@ def main() -> None:
         options=["logistic", "decision_tree", "random_forest"],
         index=2,
     )
-    model_path, metrics_path = resolve_paths(model_type)
+    _, metrics_path = resolve_paths(model_type)
     if not metrics_path.exists():
         st.error(
             f"Missing metrics for '{model_type}'. Expected: {metrics_path}. "
             f"Run training for this model first."
         )
         st.stop()
-    if not model_path.exists():
-        st.error(
-            f"Missing model for '{model_type}'. Expected: {model_path}. "
-            f"Run training for this model first."
-        )
-        st.stop()
-
     render_header(metrics_path)
     metrics = load_metrics(metrics_path)
-    model = load_model(model_path)
     data = load_dataset(DATA_PATH)
     default_threshold = float(metrics.get("threshold", 0.5))
     active_threshold = st.sidebar.slider("Decision Threshold", 0.05, 0.95, default_threshold, 0.01)
@@ -509,7 +520,7 @@ def main() -> None:
         render_snapshot_export(metrics, active_threshold)
 
     elif section == "Prediction":
-        render_prediction_form(model, metrics, data, active_threshold)
+        render_prediction_form(data)
 
     else:
         st.subheader("About")

@@ -5,13 +5,14 @@ Usage examples:
   python src/train_credit_model.py --data-path data/german_credit_data.csv --target-column Risk --model-type logistic
   python src/train_credit_model.py --data-path data/german_credit_data.csv --create-proxy-target --model-type random_forest
 """
-
+#Necessary imports
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 
+#Necessary libraries
 import joblib
 import numpy as np
 import pandas as pd
@@ -35,9 +36,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
+#Function to parse arguments
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a professional credit scoring baseline model.")
-    # `--data-path` is required so runs are explicit and reproducible (no hidden hardcoded paths).
+    #`--data-path` is required so runs are explicit and reproducible (no hidden hardcoded paths).
     parser.add_argument("--data-path", type=str, required=True, help="Path to input CSV data.")
     parser.add_argument(
         "--target-column",
@@ -95,6 +97,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="reports/metrics.json",
         help="Path for model metrics JSON report. Default auto-routes to reports/metrics_<model_type>.json.",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.01,
+        help="learning rate of the logistic model. Defaults to 0.01."
     )
     return parser.parse_args()
 
